@@ -1,0 +1,162 @@
+name: Go
+
+on: push
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    env:
+      SERVICE_NAME: sre-exporter
+    steps:
+
+    - name: Set up Go 1.x
+      uses: actions/setup-go@v2
+      with:
+        go-version: ^1.16
+      id: go
+
+    - name: Start MySQL
+      uses: samin/mysql-action@v1.3
+      with:
+        mysql root password: root
+
+    # - name: Setup ElasticSearch
+    #   uses: getong/elasticsearch-action@v1.2
+    #   with:
+    #     elasticsearch version: 7.9.3
+
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v2
+
+    - name: Generate Build Version basic
+      run: |
+        buildVersion=${GITHUB_SHA:0:10}
+        echo "BUILD_VERSION=${buildVersion}"
+        echo "BUILD_VERSION=${buildVersion}" >> $GITHUB_ENV
+
+    - name: Re-generate Build Version for branch push
+      if: ${{ github.event_name == 'push' && startsWith(github.event.ref, 'refs/heads/') }}
+      run: |
+        buildVersion=${GITHUB_REF##*/}.${GITHUB_SHA:0:10}
+        echo "BUILD_VERSION=${buildVersion}"
+        echo "BUILD_VERSION=${buildVersion}" >> $GITHUB_ENV
+
+    - name: Re-generate Build Version for branch tag
+      if: ${{ github.event_name == 'push' && startsWith(github.event.ref, 'refs/tags/') }}
+      run: |
+        buildVersion=${GITHUB_REF##*/}.${GITHUB_SHA:0:10}
+        echo "BUILD_VERSION=${buildVersion}"
+        echo "BUILD_VERSION=${buildVersion}" >> $GITHUB_ENV
+
+    - name: Get dependencies
+      run: |
+        go mod download
+
+    - name: Test
+      run: |
+        TZ='Asia/Shanghai' go test -race -coverprofile=coverage.txt -covermode=atomic ./...
+        bash <(curl -s https://codecov.io/bash)
+
+    - name: code coverage gate
+      run: |
+        curl -s -o jq https://github.com/stedolan/jq/releases/download/jq-1.6/jq-linux64
+        chmod +x jq
+        jq --version
+
+        sleep 20
+        cov_data=$(curl -s -H "Authorization: $CODECOV_TOKEN" \
+                  https://codecov.io/api/gh/fundwit/${SERVICE_NAME}/commit/${GITHUB_SHA})
+
+        parent_cov=$(echo $cov_data | jq -r .commit.parent_totals.c)
+        current_cov=$(echo $cov_data | jq -r .commit.totals.c)
+        if [ "$current_cov" == "" -o "$current_cov" == "null" ]; then
+          echo "error: coverage data not found"
+          echo $cov_data
+          exit 1
+        fi
+        
+        if [ "$parent_cov" == "" -o "$parent_cov" == "null" ]; then
+           echo "coverage of parent not found, set to 0"
+           parent_cov=0
+        fi
+        
+        echo "coverage change: ${parent_cov} => ${current_cov} " $(echo "$current_cov - $parent_cov" | bc)
+
+        if [ `echo "${current_cov} < ${parent_cov}"|bc` -eq 1 ] ; then
+          echo  "error: coverage of current commit must equal or greater than coverage of parent commit"
+          exit 1
+        fi
+
+    - name: Generate Build Info File
+      run:  |
+        timestamp=$(TZ='Asia/Shanghai' date -d today +"%Y-%m-%dT%H:%M:%S+08:00")
+        echo "BUILD_TIMESTAMP=${timestamp}" >> $GITHUB_ENV
+
+        cat >> .docker/buildInfo.json <<EOF
+        {
+          "buildTime": "${timestamp}",
+          "version": "${BUILD_VERSION}",
+          "sourceCodes": [{
+            "repository": "${GITHUB_REPOSITORY}",
+            "ref": "${GITHUB_REF}",
+            "reversion": {
+              "id": "${GITHUB_SHA}",
+              "author": "",
+              "message": "",
+              "timestamp": "0000-01-01T00:00:00Z"
+            }
+          }]
+        }
+        EOF
+        cat .docker/buildInfo.json
+
+    - name: Build
+      run: |
+        go build -v .
+        mv ${SERVICE_NAME} .docker/
+        cp -r i18n .docker/
+
+    - name: Build and push Docker images
+      env:
+        SHOULD_PUBLISH: ${{ github.event_name == 'push' && (github.event.ref == 'refs/heads/master' || github.event.ref == 'refs/heads/stage') }}
+      run: |
+        echo '' >> .docker/Dockerfile
+        echo "LABEL build.version="${BUILD_VERSION}" build.timestamp="${BUILD_TIMESTAMP}" build.source.repository="${GITHUB_REPOSITORY}" build.source.ref="${GITHUB_REF}" build.source.reversion="${GITHUB_SHA}"" >> .docker/Dockerfile
+        cat .docker/Dockerfile
+
+        registry=registry.cn-beijing.aliyuncs.com
+        imageName="${registry}/fundwit/${SERVICE_NAME}:${BUILD_VERSION}"
+        echo "image name: $imageName"
+        echo "IMAGE_NAME=${imageName}" >> $GITHUB_ENV
+
+        docker build -t $imageName .docker
+
+        if [ "${SHOULD_PUBLISH}" == 'true' ]; then
+           docker login -u ${{secrets.ALIYUN_REGISTRY_USERNAME}} -p ${{secrets.ALIYUN_REGISTRY_TOKEN}} $registry
+           docker push $imageName
+        fi
+
+    - name: update kubernetes manifests
+      if: ${{ github.event_name == 'push' && (github.event.ref == 'refs/heads/master' || github.event.ref == 'refs/heads/stage') }}
+      run: |
+        rm -rf deploy
+        mkdir deploy
+        cd deploy
+        git init
+        git config --local credential.helper store
+        cat >> ~/.git-credentials <<EOF
+        https://${{secrets.FUNDWIT_CODE_USERNAME_PASSWORD}}@code.fundwit.com
+        EOF
+
+        git remote add origin https://code.fundwit.com/infra/${SERVICE_NAME}.git
+
+        git -c protocol.version=2 fetch --no-tags --prune --progress --no-recurse-submodules --depth=1 origin master
+        git checkout --progress --force -B master refs/remotes/origin/master
+        git log -1
+        git config --local user.name ci-bot
+        git config --local user.email fundwit@qq.com
+        sed -i "s|image: registry.cn-beijing.aliyuncs.com/fundwit/${SERVICE_NAME}:.*|image: ${IMAGE_NAME}|g" deploy.yaml
+        git add deploy.yaml
+        git commit -a -m "update version to '$BUILD_VERSION'"
+        git push

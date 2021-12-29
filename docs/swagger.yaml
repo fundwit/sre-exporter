@@ -1,0 +1,37 @@
+consumes:
+- application/json
+definitions:
+  meta.ServiceInfo:
+    properties:
+      duration:
+        type: integer
+      instanceId:
+        type: string
+      name:
+        type: string
+      numCpu:
+        type: integer
+      numGoroutine:
+        type: integer
+      numMaxProcs:
+        type: integer
+      startTime:
+        type: string
+    type: object
+info:
+  contact: {}
+  description: A metadata service for changes.
+  title: sre-exporter
+  version: v0.1.x
+paths:
+  /:
+    get:
+      operationId: get-meta-infomation
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/meta.ServiceInfo'
+produces:
+- application/json
+swagger: "2.0"
