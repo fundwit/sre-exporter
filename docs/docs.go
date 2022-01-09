@@ -41,9 +41,40 @@ var doc = `{
                     }
                 }
             }
+        },
+        "/metrics": {
+            "get": {
+                "operationId": "metrics",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "default": {
+                        "description": "error",
+                        "schema": {
+                            "$ref": "#/definitions/fail.ErrorBody"
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
+        "fail.ErrorBody": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "data": {},
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
         "meta.ServiceInfo": {
             "type": "object",
             "properties": {

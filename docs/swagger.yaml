@@ -1,6 +1,14 @@
 consumes:
 - application/json
 definitions:
+  fail.ErrorBody:
+    properties:
+      code:
+        type: string
+      data: {}
+      message:
+        type: string
+    type: object
   meta.ServiceInfo:
     properties:
       duration:
@@ -32,6 +40,18 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/meta.ServiceInfo'
+  /metrics:
+    get:
+      operationId: metrics
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: string
+        default:
+          description: error
+          schema:
+            $ref: '#/definitions/fail.ErrorBody'
 produces:
 - application/json
 swagger: "2.0"

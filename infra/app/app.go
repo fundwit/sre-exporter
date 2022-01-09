@@ -11,8 +11,10 @@ import (
 	"sre-exporter/infra/fail"
 	"sre-exporter/infra/localize"
 	"sre-exporter/infra/meta"
+	"sre-exporter/infra/metric"
 	"sre-exporter/infra/persistence"
 	"sre-exporter/infra/tracing"
+	"sre-exporter/oss"
 	"strconv"
 	"syscall"
 	"time"
@@ -58,9 +60,11 @@ func Bootstrap() {
 		// gin.Recovery(),
 	)
 
-	// repository.RegisterRepositoriesRestAPI(engine)
 	meta.RegisterMetaRestAPI(engine)
 	doc.RegisterDocsAPI(engine)
+	metric.RegisterMetricsAPI(engine)
+
+	oss.RegisterMetricProvider(oss.NewOssClient())
 
 	StartHTTPServer(engine)
 }
